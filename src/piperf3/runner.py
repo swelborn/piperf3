@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import ValidationError
+import typer
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from .models import (
     GeneralConfig,
@@ -18,13 +20,15 @@ from .models import (
 class Iperf3Runner:
     """Main class for running iperf3 commands and processing results."""
 
-    def __init__(self, iperf3_path: str = "iperf3"):
-        self.iperf3_path = iperf3_path
-        self._validate_iperf3_availability()
+    def __init__(self, iperf3_path: Path):
+        self.iperf3_path = str(iperf3_path)
+        self.console = Console()
+        try:
+            self._validate_iperf3_availability()
+        except RuntimeError as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from e
 
-    # -------------------------
-    # Public API
-    # -------------------------
     def build_command(self, config: IperfClientConfig | IperfServerConfig) -> list[str]:
         cmd = [self.iperf3_path]
         if isinstance(config, IperfClientConfig):
@@ -42,68 +46,54 @@ class Iperf3Runner:
         general_config: GeneralConfig,
         timeout: int | None = None,
     ) -> IperfResult:
-        run_id = general_config.run_id or str(uuid.uuid4())
-        output_dir = self._create_output_directory(general_config, run_id)
-        cmd = self.build_command(config)
-        self._save_command(output_dir, cmd)
+        # Determine the description based on config type
+        if isinstance(config, IperfClientConfig):
+            description = "Running iperf3 client test..."
+        else:
+            description = "Running iperf3 server..."
 
-        result = IperfResult(
-            environment_name=general_config.name,
-            run_id=run_id,
-            start_time=datetime.now(timezone.utc),
-            config_used=config,
-            output_directory=output_dir,
-            provenance=general_config.get_provenance(),
-        )
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task(description, total=None)
+            try:
+                run_id = general_config.run_id or str(uuid.uuid4())
+                output_dir = self._create_output_directory(general_config, run_id)
+                cmd = self.build_command(config)
+                self._save_command(output_dir, cmd)
+                start_time = datetime.now(timezone.utc)
 
-        try:
-            process_result = self._run_subprocess(cmd, cwd=output_dir, timeout=timeout)
-            result.stdout, result.stderr, result.return_code = (
-                process_result.stdout,
-                process_result.stderr,
-                process_result.returncode,
-            )
-            result.end_time = datetime.now(timezone.utc)
+                process_result = self._run_subprocess(
+                    cmd, cwd=output_dir, timeout=timeout
+                )
+                json_results = None
+                if config.json_output:
+                    json_results = Iperf3JsonResult.model_validate_json(
+                        process_result.stdout
+                    )
+                result = IperfResult(
+                    run_id=run_id,
+                    start_time=start_time,
+                    config=config,
+                    output_directory=output_dir,
+                    stdout=process_result.stdout,
+                    stderr=process_result.stderr,
+                    return_code=process_result.returncode,
+                    end_time=datetime.now(timezone.utc),
+                    general_config=general_config,
+                    json_results=json_results,
+                )
 
-            self._parse_and_store_json_results(result, output_dir)
+                result.save()
+                progress.update(task, description="✅ Completed")
+                return result
+            except Exception as e:
+                progress.update(task, description=f"❌ Failed: {e}")
+                self.console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1) from e
 
-        except subprocess.TimeoutExpired:
-            self._handle_timeout(result, timeout)
-        except Exception as e:
-            self._handle_unexpected_error(result, e)
-
-        result.save_to_directory(output_dir)
-        return result
-
-    def run_server_background(
-        self, config: IperfServerConfig, general_config: GeneralConfig
-    ) -> tuple[subprocess.Popen, Path]:
-        run_id = general_config.run_id or str(uuid.uuid4())
-        output_dir = self._create_output_directory(general_config, run_id)
-        cmd = self.build_command(config)
-        self._save_command(output_dir, cmd)
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=output_dir,
-            env=os.environ,
-        )
-        return process, output_dir
-
-    def get_version(self) -> str:
-        try:
-            return self._run_subprocess(
-                [self.iperf3_path, "--version"], timeout=10
-            ).stdout.strip()
-        except Exception as e:
-            return f"Error getting version: {e!s}"
-
-    # -------------------------
-    # Internal Helpers
-    # -------------------------
     def _validate_iperf3_availability(self) -> None:
         try:
             result = self._run_subprocess([self.iperf3_path, "--version"], timeout=10)
@@ -133,38 +123,9 @@ class Iperf3Runner:
 
     @staticmethod
     def _create_output_directory(general_config: GeneralConfig, run_id: str) -> Path:
-        base_dir = general_config.output_directory or Path("./results")
+        base_dir = general_config.output_directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dir_name = f"{general_config.name}_{run_id[:8]}_{timestamp}"
+        dir_name = f"{timestamp}_{run_id[:8]}"
         output_dir = base_dir / dir_name
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
-
-    @staticmethod
-    def _parse_and_store_json_results(result: IperfResult, output_dir: Path) -> None:
-        try:
-            parsed = Iperf3JsonResult.model_validate_json(result.stdout)
-            result.json_results = parsed
-            (output_dir / "results.json").write_text(result.stdout)
-            result.provenance["summary_metrics"] = {
-                "sent_mbps": parsed.end.sum_sent.bits_per_second / 1e6,
-                "received_mbps": parsed.end.sum_received.bits_per_second / 1e6,
-                "sent_bytes": parsed.end.sum_sent.bytes,
-                "received_bytes": parsed.end.sum_received.bytes,
-                "duration_seconds": parsed.end.sum_sent.seconds,
-                "cpu_utilization": parsed.end.cpu_utilization_percent.model_dump(),
-            }
-        except ValidationError as e:
-            result.stderr += f"\nInvalid iperf3 JSON format: {e}"
-
-    @staticmethod
-    def _handle_timeout(result: IperfResult, timeout: int | None) -> None:
-        result.stderr = f"Command timed out after {timeout} seconds"
-        result.return_code = -1
-        result.end_time = datetime.now(timezone.utc)
-
-    @staticmethod
-    def _handle_unexpected_error(result: IperfResult, e: Exception) -> None:
-        result.stderr = f"Unexpected error: {e!s}"
-        result.return_code = -1
-        result.end_time = datetime.now(timezone.utc)

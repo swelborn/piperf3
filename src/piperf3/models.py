@@ -1,38 +1,73 @@
+import getpass
 import json
 import os
+import platform
 import socket
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
-import typer
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typer import Option
+
+from piperf3.constants import (
+    JSON_RESULTS_FILENAME,
+    METADATA_FILENAME,
+    STDERR_FILENAME,
+    STDOUT_FILENAME,
+)
+
+T = TypeVar("T")
+
+
+class TyperOptionSchema(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    default: Any = None
+    param_decls: list[str] = []
+    help: str | None = None
+    min: int | None = None
+    max: int | None = None
+    parser: Callable | None = None
+
+
+def CLIField(default: T = None, *param_decls, **kwargs) -> T:
+    """
+    Helper to create a Pydantic field with Typer Option metadata stored in json_schema_extra['cli'].
+    This allows Pydantic to use normal defaults for env loading while still keeping CLI info.
+    """
+    option = TyperOptionSchema(default=default, param_decls=list(param_decls), **kwargs)
+    return Field(
+        default=default,
+        json_schema_extra={"cli": option.model_dump()},
+    )
 
 
 class BuilderBase(BaseSettings):
-    """Mixin to build CLI arguments from Typer Option fields in a Pydantic model."""
+    """Mixin to build iperf CLI arguments from Typer Option fields in a Pydantic model."""
 
     def build_cli_args(self) -> list[str]:
         args: list[str] = []
         for field_name, field_info in self.__class__.model_fields.items():
             value = getattr(self, field_name)
-            if value is None or not isinstance(
-                field_info.default, typer.models.OptionInfo
-            ):
+            meta = (
+                field_info.json_schema_extra.get("cli")
+                if field_info.json_schema_extra
+                else None
+            )
+            if value is None or not meta or not isinstance(meta, dict):
                 continue
-
-            opt_name = self._get_option_name(field_name, field_info.default)
+            meta = TyperOptionSchema(**meta)  # type: ignore
+            opt_name = self._get_option_name(field_name, meta)
             self._append_value(args, opt_name, value)
         return args
 
     @staticmethod
-    def _get_option_name(field_name: str, opt_info: typer.models.OptionInfo) -> str:
-        if opt_info.param_decls:
+    def _get_option_name(field_name: str, cli_meta: TyperOptionSchema) -> str:
+        param_decls = cli_meta.param_decls
+        if param_decls:
             option_names = sorted(
-                opt_info.param_decls, key=lambda x: (not x.startswith("--"), x)
+                param_decls, key=lambda x: (not x.startswith("--"), x)
             )
             return option_names[0]
         return f"--{field_name.replace('_', '-')}"
@@ -52,6 +87,17 @@ class BuilderBase(BaseSettings):
                 args.extend([opt_name, str(v)])
             return
         args.extend([opt_name, str(value)])
+
+    def pretty_print(self):
+        """Format configuration object showing all non-None fields."""
+        lines = []
+        for field_name, field_info in self.__class__.model_fields.items():
+            value = getattr(self, field_name)
+            if value is not None and value != field_info.default:
+                display_name = field_name.replace("_", " ").upper()
+                lines.append(f"{display_name}: {value}")
+
+        return "\n".join(lines) if lines else "No configuration values set"
 
 
 class IperfMode(StrEnum):
@@ -89,10 +135,8 @@ class CongestionAlgorithm(StrEnum):
 class IperfBaseConfig(BuilderBase):
     """Base configuration with common iperf3 options."""
 
-    mode: IperfMode = Field(frozen=True)
-
     # Connection settings
-    port: int | None = Option(
+    port: int | None = CLIField(
         5201,
         "-p",
         "--port",
@@ -101,100 +145,79 @@ class IperfBaseConfig(BuilderBase):
         max=65535,
         help="Server port to listen on/connect to (default 5201)",
     )
-    bind_address: str | None = Option(
-        None,
-        "--bind",
-        "-B",
-        help="Bind to the specific interface/address (host[%dev] for IPv6 link-local)",
+    bind_address: str | None = CLIField(
+        None, "--bind", "-B", help="Bind to the specific interface/address"
     )
-    bind_device: str | None = Option(
-        None,
-        "--bind-dev",
-        help="Bind to the specified network interface (SO_BINDTODEVICE, may require root)",
+    bind_device: str | None = CLIField(
+        None, "--bind-dev", help="Bind to the specified network interface"
     )
 
     # Protocol
-    ipv4_only: bool = Option(False, "-4", "--version4", help="Only use IPv4")
-    ipv6_only: bool = Option(False, "-6", "--version6", help="Only use IPv6")
+    ipv4_only: bool = CLIField(False, "-4", "--version4", help="Only use IPv4")
+    ipv6_only: bool = CLIField(False, "-6", "--version6", help="Only use IPv6")
 
     # Output
-    format: Format | None = Option(
+    format: Format | None = CLIField(
         None,
         "-f",
         "--format",
         parser=str,
         help="Format to report: k/m/g/t for bits, K/M/G/T for bytes",
     )
-    interval: float | None = Option(
+    interval: float | None = CLIField(
         None,
         "-i",
         "--interval",
         parser=int,
         min=0,
-        help="Pause n seconds between periodic throughput reports (default 1, 0 to disable)",
+        help="Pause n seconds between periodic throughput reports",
     )
-    json_output: bool = Option(
+    json_output: bool = CLIField(
         False, "-J", "--json", help="Output results in JSON format"
     )
-    json_stream: bool = Option(
-        False,
-        "--json-stream",
-        help="Output in line-delimited JSON format (real-time parsable)",
+    json_stream: bool = CLIField(
+        False, "--json-stream", help="Output in line-delimited JSON format"
     )
-    verbose: bool = Option(False, "-V", "--verbose", help="Give more detailed output")
+    verbose: bool = CLIField(False, "-V", "--verbose", help="Give more detailed output")
 
     # Advanced
-    cpu_affinity: str | None = Option(
-        None,
-        "-A",
-        "--affinity",
-        parser=str,
-        help="Set CPU affinity: 'n' for local, 'n,m' to override server's affinity",
+    cpu_affinity: str | None = CLIField(
+        None, "-A", "--affinity", parser=str, help="Set CPU affinity"
     )
-    pidfile: Path | None = Option(
+    pidfile: Path | None = CLIField(
         None, "-I", "--pidfile", parser=str, help="Write a file with the process ID"
     )
-    logfile: Path | None = Option(
+    logfile: Path | None = CLIField(
         None, "--logfile", parser=str, help="Send output to a log file"
     )
-    force_flush: bool = Option(
+    force_flush: bool = CLIField(
         False, "--forceflush", help="Force flushing output at every interval"
     )
-    timestamps: str | None = Option(
-        None,
-        "--timestamps",
-        help="Prepend a timestamp to each output line (optional strftime format)",
+    timestamps: str | None = CLIField(
+        None, "--timestamps", help="Prepend a timestamp to each output line"
     )
-    debug: bool = Option(
-        False, "-d", "--debug", help="Emit debugging output (developer use)"
-    )
-    dscp: str | None = Option(None, "--dscp", help="set the IP DSCP bits")
+    debug: bool = CLIField(False, "-d", "--debug", help="Emit debugging output")
+    dscp: str | None = CLIField(None, "--dscp", help="Set the IP DSCP bits")
 
     # Timeouts
-    rcv_timeout: int | None = Option(
-        None,
-        "--rcv-timeout",
-        parser=int,
-        min=0,
-        help="Idle timeout for receiving data during active tests (ms, default 120000)",
+    rcv_timeout: int | None = CLIField(
+        None, "--rcv-timeout", parser=int, min=0, help="Idle timeout for receiving data"
     )
-    snd_timeout: int | None = Option(
+    snd_timeout: int | None = CLIField(
         None,
         "--snd-timeout",
         parser=int,
         min=0,
-        help="Timeout for unacknowledged TCP data (ms)",
+        help="Timeout for unacknowledged TCP data",
     )
 
     # Security
-    use_pkcs1_padding: bool = Option(
-        False,
-        "--use-pkcs1-padding",
-        help="Use less secure PKCS1 padding for RSA authentication (compatibility mode)",
+    use_pkcs1_padding: bool = CLIField(
+        False, "--use-pkcs1-padding", help="Use less secure PKCS1 padding"
     )
 
     # MPTCP
-    mptcp: bool = Option(False, "-m", "--mptcp", help="Enable MPTCP usage (TCP only)")
+    mptcp: bool = CLIField(False, "-m", "--mptcp", help="Enable MPTCP usage")
 
     @field_validator("cpu_affinity")
     @classmethod
@@ -227,50 +250,41 @@ class IperfServerConfig(IperfBaseConfig):
         case_sensitive=False,
         extra="ignore",
     )
-    """Server-specific configuration."""
 
     mode: IperfMode = Field(default=IperfMode.SERVER, frozen=True)
 
-    daemon: bool = Option(
+    daemon: bool = CLIField(
         False, "-D", "--daemon", help="Run the server in background as a daemon"
     )
-    one_off: bool = Option(
+    one_off: bool = CLIField(
         False, "-1", "--one-off", help="Handle one client connection, then exit"
     )
-    idle_timeout: int | None = Option(
+    idle_timeout: int | None = CLIField(
         None,
         "--idle-timeout",
         parser=str,
         min=0,
         help="Restart or exit after n seconds of idle time",
     )
-    server_bitrate_limit: str | None = Option(
-        None,
-        "--server-bitrate-limit",
-        help="Abort if client requests >n bits/sec or exceeds average rate",
+    server_bitrate_limit: str | None = CLIField(
+        None, "--server-bitrate-limit", help="Abort if client requests >n bits/sec"
     )
-    rsa_private_key_path: Path | None = Option(
-        None,
-        "--rsa-private-key-path",
-        help="Path to RSA private key for decrypting authentication credentials",
+    rsa_private_key_path: Path | None = CLIField(
+        None, "--rsa-private-key-path", help="Path to RSA private key"
     )
-    authorized_users_path: Path | None = Option(
-        None,
-        "--authorized-users-path",
-        help="Path to file containing authorized user credentials",
+    authorized_users_path: Path | None = CLIField(
+        None, "--authorized-users-path", help="Path to file containing authorized users"
     )
-    time_skew_threshold: int | None = Option(
+    time_skew_threshold: int | None = CLIField(
         None,
         "--time-skew-threshold",
         parser=str,
         min=0,
-        help="Time skew threshold (seconds) in authentication",
+        help="Time skew threshold in authentication",
     )
 
 
 class IperfClientConfig(IperfBaseConfig):
-    """Client-specific configuration."""
-
     model_config = SettingsConfigDict(
         env_prefix="IPERF_CLIENT_",
         env_file=".env",
@@ -284,50 +298,34 @@ class IperfClientConfig(IperfBaseConfig):
 
     server_host: str | None = Field(default=None, description="Server hostname or IP")
 
-    time: int | None = Option(
-        None,
-        "-t",
-        "--time",
-        parser=int,
-        min=1,
-        help="Time in seconds to transmit for (default 10)",
+    time: int | None = CLIField(
+        None, "-t", "--time", parser=int, min=1, help="Time in seconds to transmit for"
     )
-    bytes: str | None = Option(
-        None,
-        "-n",
-        "--bytes",
-        help="Number of bytes to transmit instead of time-based test",
+    bytes: str | None = CLIField(
+        None, "-n", "--bytes", help="Number of bytes to transmit"
     )
-    blockcount: str | None = Option(
-        None,
-        "-k",
-        "--blockcount",
-        help="Number of blocks (packets) to transmit instead of time/bytes",
+    blockcount: str | None = CLIField(
+        None, "-k", "--blockcount", help="Number of blocks to transmit"
     )
-    bitrate: str | None = Option(
-        None,
-        "-b",
-        "--bitrate",
-        help="Target bitrate (bits/sec), supports suffixes and burst mode",
-    )
-    pacing_timer: str | None = Option(
+    bitrate: str | None = CLIField(None, "-b", "--bitrate", help="Target bitrate")
+    pacing_timer: str | None = CLIField(
         None,
         "--pacing-timer",
         parser=str,
         min=1,
-        help="Pacing timer interval in microseconds (default 1000)",
+        help="Pacing timer interval in microseconds",
     )
-    fq_rate: str | None = Option(
-        None, "--fq-rate", help="Fair-queueing based socket pacing rate (bits/sec)"
+    fq_rate: str | None = CLIField(
+        None, "--fq-rate", help="Fair-queueing based socket pacing rate"
     )
-    connect_timeout: int | None = Option(
+    connect_timeout: int | None = CLIField(
         None,
         "--connect-timeout",
         parser=int,
         min=1,
-        help="Timeout for establishing control connection (ms)",
+        help="Timeout for establishing connection",
     )
-    parallel_streams: int | None = Option(
+    parallel_streams: int | None = CLIField(
         None,
         "-P",
         "--parallel",
@@ -335,19 +333,17 @@ class IperfClientConfig(IperfBaseConfig):
         min=1,
         help="Number of parallel client streams",
     )
-    reverse: bool = Option(
-        False, "-R", "--reverse", help="Reverse direction: server sends to client"
-    )
-    bidir: bool = Option(
+    reverse: bool = CLIField(False, "-R", "--reverse", help="Reverse direction")
+    bidir: bool = CLIField(
         False, "--bidir", help="Test in both directions simultaneously"
     )
-    length: str | None = Option(
-        None, "-l", "--length", help="Buffer length to read/write (TCP default 128KB)"
+    length: str | None = CLIField(
+        None, "-l", "--length", help="Buffer length to read/write"
     )
-    window: str | None = Option(
+    window: str | None = CLIField(
         None, "-w", "--window", help="Socket buffer/window size"
     )
-    set_mss: int | None = Option(
+    set_mss: int | None = CLIField(
         None,
         "-M",
         "--set-mss",
@@ -355,10 +351,10 @@ class IperfClientConfig(IperfBaseConfig):
         min=1,
         help="Set TCP/SCTP maximum segment size",
     )
-    no_delay: bool = Option(
-        False, "-N", "--no-delay", help="Disable Nagle's Algorithm (TCP/SCTP)"
+    no_delay: bool = CLIField(
+        False, "-N", "--no-delay", help="Disable Nagle's Algorithm"
     )
-    client_port: int | None = Option(
+    client_port: int | None = CLIField(
         None,
         "--cport",
         parser=int,
@@ -366,66 +362,56 @@ class IperfClientConfig(IperfBaseConfig):
         max=65535,
         help="Bind data streams to a specific client port",
     )
-    tos: str | None = Option(
-        None,
-        "-S",
-        "--tos",
-        parser=str,
-        help="Set IP type of service (TOS)",
+    tos: str | None = CLIField(
+        None, "-S", "--tos", parser=str, help="Set IP type of service"
     )
-    flowlabel: int | None = Option(
+    flowlabel: int | None = CLIField(
         None, "-L", "--flowlabel", parser=str, min=0, help="Set IPv6 flow label"
     )
-    file_input: Path | None = Option(
-        None, "-F", "--file", help="Use a file as source/sink instead of generated data"
+    file_input: Path | None = CLIField(
+        None, "-F", "--file", help="Use a file as source/sink"
     )
-    sctp_streams: int | None = Option(
+    sctp_streams: int | None = CLIField(
         None, "--nstreams", parser=int, min=1, help="Number of SCTP streams"
     )
-    zerocopy: bool = Option(
-        False, "-Z", "--zerocopy", help="Use zero-copy method for sending data"
+    zerocopy: bool = CLIField(False, "-Z", "--zerocopy", help="Use zero-copy method")
+    skip_rx_copy: bool = CLIField(
+        False, "--skip-rx-copy", help="Ignore received packet data"
     )
-    skip_rx_copy: bool = Option(
-        False, "--skip-rx-copy", help="Ignore received packet data (MSG_TRUNC)"
-    )
-    omit: int | None = Option(
+    omit: int | None = CLIField(
         None,
         "-O",
         "--omit",
         parser=int,
         min=0,
-        help="Omit first N seconds from statistics (skip slow-start)",
+        help="Omit first N seconds from statistics",
     )
-    title: str | None = Option(
+    title: str | None = CLIField(
         None, "-T", "--title", help="Prefix every output line with this string"
     )
-    extra_data: str | None = Option(
-        None, "--extra-data", help="Extra data string to include in JSON output"
+    extra_data: str | None = CLIField(
+        None, "--extra-data", help="Extra data string for JSON output"
     )
-    congestion_algorithm: CongestionAlgorithm | None = Option(
+    congestion_algorithm: CongestionAlgorithm | None = CLIField(
         None, "-C", "--congestion", help="Set congestion control algorithm"
     )
-    get_server_output: bool = Option(
+    get_server_output: bool = CLIField(
         False, "--get-server-output", help="Retrieve server-side output"
     )
-    udp_counters_64bit: bool = Option(
+    udp_counters_64bit: bool = CLIField(
         False, "--udp-counters-64bit", help="Use 64-bit counters in UDP test packets"
     )
-    repeating_payload: bool = Option(
-        False,
-        "--repeating-payload",
-        help="Use repeating pattern in payload instead of random bytes",
+    repeating_payload: bool = CLIField(
+        False, "--repeating-payload", help="Use repeating pattern in payload"
     )
-    dont_fragment: bool = Option(
-        False, "--dont-fragment", help="Set IPv4 Don't Fragment bit (UDP over IPv4)"
+    dont_fragment: bool = CLIField(
+        False, "--dont-fragment", help="Set IPv4 Don't Fragment bit"
     )
-    username: str | None = Option(
-        None, "--username", help="Username for authentication (if built with OpenSSL)"
+    username: str | None = CLIField(
+        None, "--username", help="Username for authentication"
     )
-    rsa_public_key_path: Path | None = Option(
-        None,
-        "--rsa-public-key-path",
-        help="Path to RSA public key for encrypting authentication credentials",
+    rsa_public_key_path: Path | None = CLIField(
+        None, "--rsa-public-key-path", help="Path to RSA public key"
     )
 
 
@@ -433,7 +419,6 @@ class SlurmConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="SLURM_", case_sensitive=False, extra="ignore"
     )
-
     job_id: str | None = None
     job_name: str | None = None
     job_partition: str | None = None
@@ -447,6 +432,23 @@ class SlurmConfig(BaseSettings):
     localid: str | None = None
 
 
+class NodeInfo(BaseModel):
+    hostname: str = Field(default_factory=socket.gethostname)
+    fqdn: str = Field(default_factory=socket.getfqdn)
+    cpu_count: int | None = Field(default_factory=os.cpu_count)
+    username: str = Field(default_factory=getpass.getuser)
+    platform_system: str = Field(default_factory=platform.system)
+    platform_release: str = Field(default_factory=platform.release)
+    platform_version: str = Field(default_factory=platform.version)
+    platform_machine: str = Field(default_factory=platform.machine)
+    platform_processor: str = Field(default_factory=platform.processor)
+    architecture: tuple[str, str] = Field(default_factory=platform.architecture)
+    python_version: str = Field(default_factory=platform.python_version)
+    python_build: tuple[str, str] = Field(default_factory=platform.python_build)
+    python_compiler: str = Field(default_factory=platform.python_compiler)
+    node: str = Field(default_factory=platform.node)
+
+
 class GeneralConfig(BuilderBase):
     model_config = SettingsConfigDict(
         env_prefix="PIPERF3_",
@@ -456,57 +458,37 @@ class GeneralConfig(BuilderBase):
         case_sensitive=False,
         extra="ignore",
     )
-
-    # CLI-exposed options
-    name: str = Option(
-        "iperf3_test_environment", "--name", help="Name of the test environment"
+    iperf3_path: Path = CLIField(
+        Path("iperf3"),
+        "--iperf3-path",
+        help="Path to the iperf3 executable",
     )
-    description: str | None = Option(
-        None, "--description", help="Description of the test environment"
-    )
-    version: str = Option("1.0", "--version", help="Version of the configuration")
-    created_by: str | None = Option(
+    created_by: str | None = CLIField(
         os.environ.get("USER", "unknown"),
         "--created-by",
         help="User who created this configuration",
     )
-    tags: list[str] = Option(
-        [], "--tag", help="One or more tags for this configuration"
-    )
-    output_directory: Path | None = Option(
-        None,
+    output_directory: Path = CLIField(
+        Path("./results"),
         "--output-directory",
         "--output-dir",
         help="Directory to store output files",
     )
-    run_id: str | None = Option(None, "--run-id", help="Run identifier")
-
-    # Internal / auto-generated fields (not exposed as CLI options)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    node_info: dict[str, Any] = Field(default_factory=lambda: _collect_node_info())
-
-    def get_provenance(self) -> dict[str, Any]:
-        slurm_config = SlurmConfig()
-        return {
-            "name": self.name,
-            "version": self.version,
-            "created_at": self.created_at.isoformat(),
-            "created_by": self.created_by,
-            "tags": self.tags,
-            "node_info": self.node_info,
-            "slurm_info": slurm_config.model_dump(),
-        }
+    run_id: str | None = CLIField(None, "--run-id", help="Run identifier")
 
 
-class IntervalStream(BaseModel):
+class StreamBase(BaseModel):
     socket: int
     start: float
     end: float
     seconds: float
     bytes: int
     bits_per_second: float
-    omitted: bool
     sender: bool
+
+
+class IntervalStream(StreamBase):
+    omitted: bool
 
 
 class IntervalSum(BaseModel):
@@ -542,8 +524,21 @@ class CpuUtilization(BaseModel):
     remote_system: float
 
 
+class StreamSender(StreamBase):
+    pass
+
+
+class StreamReceiver(StreamBase):
+    pass
+
+
+class EndStream(BaseModel):
+    sender: StreamSender
+    receiver: StreamReceiver
+
+
 class EndSection(BaseModel):
-    streams: list[dict]  # Could be typed more strictly
+    streams: list[EndStream]
     sum_sent: SumSentReceived
     sum_received: SumSentReceived
     cpu_utilization_percent: CpuUtilization
@@ -565,12 +560,30 @@ class StartTestStart(BaseModel):
     interval: int
 
 
+class Connected(BaseModel):
+    socket: int
+    local_host: str
+    local_port: int
+    remote_host: str
+    remote_port: int
+
+
+class TimeStamp(BaseModel):
+    time: str
+    timesecs: int
+
+
+class ConnectingTo(BaseModel):
+    host: str
+    port: int
+
+
 class StartSection(BaseModel):
-    connected: list[dict]
+    connected: list[Connected]
     version: str
     system_info: str
-    timestamp: dict
-    connecting_to: dict
+    timestamp: TimeStamp
+    connecting_to: ConnectingTo
     cookie: str
     tcp_mss_default: int
     target_bitrate: int
@@ -587,46 +600,13 @@ class Iperf3JsonResult(BaseModel):
     end: EndSection
 
 
-def _read_proc_value(path: str, key: str, transform=lambda v: v) -> Any:
-    try:
-        with open(path, "r") as f:
-            for line in f:
-                if line.startswith(key):
-                    return transform(
-                        line.split(":", 1)[1].strip()
-                        if ":" in line
-                        else line.split()[1]
-                    )
-    except Exception:
-        return None
-
-
-def _collect_node_info() -> dict[str, Any]:
-    return {
-        "hostname": socket.gethostname(),
-        "fqdn": socket.getfqdn(),
-        "cpu_model": _read_proc_value("/proc/cpuinfo", "model name"),
-        "cpu_count": str(
-            _read_proc_value(
-                "/proc/cpuinfo",
-                "processor",
-                lambda _: open("/proc/cpuinfo").read().count("processor"),
-            )
-        ),
-        "memory_gb": _read_proc_value(
-            "/proc/meminfo",
-            "MemTotal",
-            lambda v: str(round(int(v.split()[0]) / 1024 / 1024, 2)),
-        ),
-    }
-
-
 class IperfResult(BaseModel):
-    environment_name: str
     run_id: str
     start_time: datetime
     end_time: datetime | None = None
-    config_used: IperfClientConfig | IperfServerConfig
+    config: IperfClientConfig | IperfServerConfig
+    general_config: GeneralConfig
+    node_info: NodeInfo = Field(default_factory=NodeInfo)
     stdout: str = ""
     stderr: str = ""
     return_code: int = 0
@@ -635,16 +615,30 @@ class IperfResult(BaseModel):
     stdout_file: Path | None = None
     stderr_file: Path | None = None
     json_file: Path | None = None
-    provenance: dict[str, Any] = Field(default_factory=dict)
 
-    def save_to_directory(self, directory: Path) -> None:
+    def coerce_full_paths(self):
+        path_attrs = ["output_directory", "stdout_file", "stderr_file", "json_file"]
+        for attr_name in path_attrs:
+            path = getattr(self, attr_name)
+            if path and isinstance(path, Path):
+                setattr(self, attr_name, path.expanduser().absolute())
+        return self
+
+    def save(self) -> None:
+        directory = self.output_directory
         directory.mkdir(parents=True, exist_ok=True)
-        self._write_if_content(directory / "stdout.txt", self.stdout)
-        self._write_if_content(directory / "stderr.txt", self.stderr)
+        self.stderr_file = directory / STDERR_FILENAME
+        self._write_if_content(self.stderr_file, self.stderr)
         if self.json_results:
-            self._write_json(directory / "results.json", self.json_results.model_dump())
+            self.json_file = directory / JSON_RESULTS_FILENAME
+            self._write_json(self.json_file, self.json_results.model_dump())
+        else:
+            self.stdout_file = directory / STDOUT_FILENAME
+            self._write_if_content(self.stdout_file, self.stdout)
+
+        self.coerce_full_paths()
         self._write_json(
-            directory / "result_metadata.json",
+            directory / METADATA_FILENAME,
             self.model_dump(exclude={"stdout", "stderr", "json_results"}),
         )
 

@@ -32,7 +32,6 @@ class IperfPlotter:
         title: str | None = None,
     ):
         """Plot throughput over time and cumulative data transfer."""
-        self._require_json_results(result)
 
         times, throughput_bits, throughput_bytes = self._extract_time_series(result)
 
@@ -60,7 +59,7 @@ class IperfPlotter:
         )
 
         fig.suptitle(
-            title or f"Iperf3 Results - {result.environment_name}",
+            title or "Iperf3 Results",
             fontsize=16,
             fontweight="bold",
         )
@@ -71,7 +70,6 @@ class IperfPlotter:
         self, result: IperfResult, output_file: Path | None = None
     ):
         """Plot comparison of multiple parallel streams."""
-        self._require_json_results(result)
 
         stream_data = self._extract_stream_data(result)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -179,6 +177,8 @@ class IperfPlotter:
 
     @staticmethod
     def _extract_time_series(result: IperfResult):
+        if not result.json_results:
+            raise ValueError("JSON results required for time series extraction")
         times, throughput_bits, throughput_bytes = [], [], []
         for interval in result.json_results.intervals:
             sum_data = interval.sum
@@ -189,6 +189,8 @@ class IperfPlotter:
 
     @staticmethod
     def _extract_stream_data(result: IperfResult):
+        if not result.json_results:
+            raise ValueError("JSON results required for stream data extraction")
         stream_data = {}
         for interval in result.json_results.intervals:
             time = interval.sum.start
@@ -208,7 +210,6 @@ class IperfPlotter:
                 recv = res.json_results.end.sum_received
                 comparison_data.append(
                     {
-                        "name": res.environment_name,
                         "run_id": res.run_id[:8],
                         "sent_gbps": sent.bits_per_second / 1e9,
                         "received_gbps": recv.bits_per_second / 1e9,
@@ -270,7 +271,7 @@ class IperfPlotter:
         sent = json_results.end.sum_sent
         recv = json_results.end.sum_received
         return {
-            "Start Time": json_results.start.timestamp["time"],
+            "Start Time": json_results.start.timestamp.time,
             "Duration": f"{sent.seconds:.2f} sec",
             "Protocol": json_results.start.test_start.protocol,
             "Sent Throughput": f"{sent.bits_per_second / 1e9:.2f} Gbps",
@@ -284,7 +285,6 @@ class IperfPlotter:
         csv_data = []
         for result in results:
             row = {
-                "environment_name": result.environment_name,
                 "run_id": result.run_id,
                 "start_time": result.start_time,
                 "end_time": result.end_time,

@@ -3,16 +3,16 @@ import inspect
 from functools import wraps
 
 import typer
+from pydantic_settings import BaseSettings
 from rich.console import Console
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
+from .display import display_config_panel, display_results
 from .models import (
     GeneralConfig,
     IperfClientConfig,
     IperfResult,
     IperfServerConfig,
+    TyperOptionSchema,
 )
 from .plotting import IperfPlotter
 from .runner import Iperf3Runner
@@ -26,7 +26,7 @@ app = typer.Typer(
 console = Console()
 
 
-def cli_from_models(*model_classes):
+def cli_from_models(*model_classes: type[BaseSettings]):
     """Decorator to inject Typer Option fields from Pydantic models into CLI commands."""
 
     def decorator(func):
@@ -39,14 +39,27 @@ def cli_from_models(*model_classes):
 
         for model_cls in model_classes:
             for field_name, field_info in model_cls.model_fields.items():
-                default = field_info.default
-                if not isinstance(default, typer.models.OptionInfo):
+                cli_meta = (
+                    field_info.json_schema_extra.get("cli")
+                    if field_info.json_schema_extra
+                    else None
+                )
+                if not cli_meta:
                     continue
+                option_model = TyperOptionSchema(**cli_meta)  # type: ignore
+                option = typer.Option(
+                    option_model.default,
+                    *option_model.param_decls,
+                    help=option_model.help,
+                    min=option_model.min,
+                    max=option_model.max,
+                    parser=option_model.parser,
+                )
                 new_params.append(
                     inspect.Parameter(
                         field_name,
                         kind=inspect.Parameter.KEYWORD_ONLY,
-                        default=default,
+                        default=option,
                         annotation=field_info.annotation,
                     )
                 )
@@ -54,84 +67,46 @@ def cli_from_models(*model_classes):
         @wraps(func)
         def wrapper(*args, **kwargs):
             configs = {}
+            # Collect all field names from all model classes
+            all_model_fields = set()
             for model_cls in model_classes:
+                all_model_fields.update(model_cls.model_fields.keys())
+
+            for model_cls in model_classes:
+                # First create config from environment/defaults
+                base_config = model_cls()
+
+                # Then override with CLI arguments
                 model_kwargs = {
-                    k: v for k, v in kwargs.items() if k in model_cls.model_fields
+                    k: v
+                    for k, v in kwargs.items()
+                    if k in model_cls.model_fields
+                    and v is not None
+                    and v != model_cls.model_fields[k].default
                 }
-                for k in model_kwargs:
-                    kwargs.pop(k)
-                configs[model_cls] = model_cls(**model_kwargs)
+
+                # Apply CLI overrides to the base config
+                for key, value in model_kwargs.items():
+                    setattr(base_config, key, value)
+
+                configs[model_cls] = base_config
+
+            # Remove all model field arguments from kwargs before passing to function
+            filtered_kwargs = {
+                k: v for k, v in kwargs.items() if k not in all_model_fields
+            }
+
             return func(
                 *args,
                 config=configs.get(IperfClientConfig) or configs.get(IperfServerConfig),
                 general_config=configs.get(GeneralConfig),
-                **kwargs,
+                **filtered_kwargs,
             )
 
-        wrapper.__signature__ = sig.replace(parameters=new_params)  # type: ignore
+        wrapper.__signature__ = sig.replace(parameters=new_params)  # pyright: ignore[reportAttributeAccessIssue]
         return wrapper
 
     return decorator
-
-
-def _display_config_panel(title: str, info: str, style: str = "bold blue"):
-    console.print(Panel(info, title=f"[{style}]{title}[/{style}]", expand=False))
-
-
-def _run_with_progress(description: str, func, *args, **kwargs):
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task(description, total=None)
-        try:
-            result = func(*args, **kwargs)
-            progress.update(task, description="✅ Completed")
-            return result
-        except Exception as e:
-            progress.update(task, description=f"❌ Failed: {e}")
-            console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1) from e
-
-
-def _display_results(result: IperfResult, verbose: bool = False):
-    if result.return_code != 0:
-        console.print(f"[red]Test failed with return code {result.return_code}[/red]")
-        if result.stderr:
-            console.print(f"[red]Error: {result.stderr}[/red]")
-        return
-
-    table = Table(title="Test Results Summary")
-    table.add_column("Metric", style="cyan", no_wrap=True)
-    table.add_column("Value", style="green")
-
-    table.add_row("Environment", result.environment_name)
-    table.add_row("Run ID", result.run_id[:8])
-    table.add_row("Start Time", str(result.start_time))
-    table.add_row(
-        "Duration",
-        str(result.end_time - result.start_time) if result.end_time else "N/A",
-    )
-    table.add_row("Return Code", str(result.return_code))
-
-    if result.json_results:
-        sent = result.json_results.end.sum_sent
-        recv = result.json_results.end.sum_received
-        table.add_row("Sent Throughput", f"{sent.bits_per_second / 1e9:.2f} Gbps")
-        table.add_row("Sent Data", f"{sent.bytes / 1e6:.2f} MB")
-        table.add_row("Received Throughput", f"{recv.bits_per_second / 1e9:.2f} Gbps")
-        table.add_row("Received Data", f"{recv.bytes / 1e6:.2f} MB")
-
-    console.print(table)
-
-    if verbose and result.stdout:
-        console.print("\n[bold]Raw Output:[/bold]")
-        console.print(Panel(result.stdout, title="stdout", border_style="blue"))
-
-    if result.stderr:
-        console.print("\n[bold]Errors/Warnings:[/bold]")
-        console.print(Panel(result.stderr, title="stderr", border_style="red"))
 
 
 def _generate_plots(result: IperfResult):
@@ -153,30 +128,27 @@ def _generate_plots(result: IperfResult):
 
 @cli_from_models(IperfClientConfig, GeneralConfig)
 def client(
-    server: str = typer.Argument(..., help="Server hostname or IP address"),
+    server=typer.Argument(
+        ..., envvar="IPERF_CLIENT_SERVER_HOST", help="Server hostname or IP"
+    ),
     config: IperfClientConfig = None,  # pyright: ignore[reportArgumentType]
     general_config: GeneralConfig = None,  # pyright: ignore[reportArgumentType]
 ):
     """Run iperf3 client with the specified configuration."""
     config.server_host = server
+
+    # Display full configuration
+    config_info = config.pretty_print()
+    display_config_panel("Full Configuration", config_info)
+
     plot = True
     if plot and not config.json_output:
         console.print("[yellow]Enabling JSON output for plotting[/yellow]")
         config.json_output = True
 
-    config_info = (
-        f"Server: {config.server_host}:{config.port}\n"
-        f"Duration: {config.time or 10}s\n"
-        f"Protocol: {config.format or 'tcp'}\n"
-        f"Parallel streams: {config.parallel_streams or 1}"
-    )
-    _display_config_panel("Client Configuration", config_info)
-
-    runner = Iperf3Runner()
-    result = _run_with_progress(
-        "Running iperf3 client test...", runner.run, config, general_config
-    )
-    _display_results(result, verbose=config.verbose)
+    runner = Iperf3Runner(iperf3_path=general_config.iperf3_path)
+    result = runner.run(config, general_config)
+    display_results(result, verbose=config.verbose)
 
     if plot and result.json_results:
         _generate_plots(result)
@@ -189,34 +161,18 @@ def server(
     general_config: GeneralConfig = None,  # pyright: ignore[reportArgumentType]
 ):
     """Run iperf3 server with the specified configuration."""
-    runner = Iperf3Runner()
-
-    if config.daemon:
-        info = f"[bold green]Starting iperf3 server in daemon mode[/bold green]\nPort: {config.port or 5201}\nBind: {config.bind_address or 'all interfaces'}"
-        _display_config_panel("Server Configuration", info, style="bold green")
-        try:
-            process, output_dir = runner.run_server_background(config, general_config)
-            console.print(f"[green]Server started with PID {process.pid}[/green]")
-            console.print(f"[green]Output directory: {output_dir}[/green]")
-            if output_dir:
-                (output_dir / "server.pid").write_text(str(process.pid))
-        except Exception as e:
-            console.print(f"[red]Error starting server: {e}[/red]")
-            raise typer.Exit(1) from e
-    else:
-        info = f"[bold green]Starting iperf3 server[/bold green]\nPort: {config.port or 5201}\nBind: {config.bind_address or 'all interfaces'}\nOne-off: {config.one_off}"
-        _display_config_panel("Server Configuration", info, style="bold green")
-        try:
-            result = _run_with_progress(
-                "Running iperf3 server...", runner.run, config, general_config
-            )
-            _display_results(result, verbose=config.verbose)
-            console.print(f"[green]Results saved to: {result.output_directory}[/green]")
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Server interrupted by user[/yellow]")
-        except Exception as e:
-            console.print(f"[red]Error running server: {e}[/red]")
-            raise typer.Exit(1) from e
+    runner = Iperf3Runner(iperf3_path=general_config.iperf3_path)
+    config_info = config.pretty_print()
+    display_config_panel("Server Configuration", config_info, style="bold green")
+    try:
+        result = runner.run(config, general_config)
+        display_results(result, verbose=config.verbose)
+        console.print(f"[green]Results saved to: {result.output_directory}[/green]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Server interrupted by user[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error running server: {e}[/red]")
+        raise typer.Exit(1) from e
 
 
 app.command()(client)
