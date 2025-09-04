@@ -469,7 +469,7 @@ wheels = [
 
 [[package]]
 name = "piperf3"
-version = "0.0.2"
+version = "0.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
