@@ -1,4 +1,3 @@
-import contextlib
 import inspect
 from functools import wraps
 
@@ -114,13 +113,7 @@ def _generate_plots(result: IperfResult):
     try:
         plot_dir = result.output_directory / "plots"
         plot_dir.mkdir(exist_ok=True)
-        plotter.plot_throughput_time_series(result).savefig(
-            plot_dir / "throughput_timeseries.png", dpi=300, bbox_inches="tight"
-        )
-        with contextlib.suppress(ValueError):
-            plotter.plot_multi_stream_comparison(result).savefig(
-                plot_dir / "stream_comparison.png", dpi=300, bbox_inches="tight"
-            )
+        plotter.plot_multi_stream_comparison(result, plot_dir / "stream_comparison.png")
         console.print(f"[green]Plots saved to: {plot_dir}[/green]")
     except Exception as e:
         console.print(f"[yellow]Warning: Could not generate plots: {e}[/yellow]")
