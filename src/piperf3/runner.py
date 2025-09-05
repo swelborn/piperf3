@@ -26,9 +26,13 @@ class Iperf3Runner:
         self.console = Console()
         try:
             self._validate_iperf3_availability()
-        except RuntimeError as e:
-            self.console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1) from e
+        except RuntimeError:
+            try:
+                self.iperf3_path = str(iperf3_path.resolve())
+                self._validate_iperf3_availability()
+            except RuntimeError as e:
+                self.console.print(f"[red]Error: {e}[/red]")
+                raise typer.Exit(1) from e
 
     def build_command(self, config: IperfClientConfig | IperfServerConfig) -> list[str]:
         cmd = [self.iperf3_path]
