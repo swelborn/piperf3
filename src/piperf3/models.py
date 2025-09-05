@@ -494,6 +494,21 @@ class StreamBase(BaseModel):
     bits_per_second: float
     sender: bool
 
+    @property
+    def throughput_gbps(self) -> float:
+        """Throughput in Gbps."""
+        return self.bits_per_second / 1e9
+
+    @property
+    def data_mb(self) -> float:
+        """Data transferred in MB."""
+        return self.bytes / 1e6
+
+    @property
+    def time(self) -> float:
+        """Alias for start time."""
+        return self.start
+
 
 class IntervalStream(StreamBase):
     omitted: bool
@@ -508,6 +523,21 @@ class IntervalSum(BaseModel):
     omitted: bool
     sender: bool
 
+    @property
+    def throughput_gbps(self) -> float:
+        """Throughput in Gbps."""
+        return self.bits_per_second / 1e9
+
+    @property
+    def data_mb(self) -> float:
+        """Data transferred in MB."""
+        return self.bytes / 1e6
+
+    @property
+    def time(self) -> float:
+        """Alias for start time."""
+        return self.start
+
 
 class Interval(BaseModel):
     streams: list[IntervalStream]
@@ -521,6 +551,16 @@ class SumSentReceived(BaseModel):
     bytes: int
     bits_per_second: float
     sender: bool
+
+    @property
+    def throughput_gbps(self) -> float:
+        """Throughput in Gbps."""
+        return self.bits_per_second / 1e9
+
+    @property
+    def data_mb(self) -> float:
+        """Data transferred in MB."""
+        return self.bytes / 1e6
 
 
 class CpuUtilization(BaseModel):

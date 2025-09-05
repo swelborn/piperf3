@@ -16,92 +16,119 @@ class IperfPlotter:
 
     def __init__(
         self,
-        style: Literal["white", "dark", "whitegrid", "darkgrid", "ticks"] = "darkgrid",
+        style: Literal["white", "dark", "whitegrid", "darkgrid", "ticks"] = "white",
     ):
         sns.set_style(style)
-        plt.style.use("seaborn-v0_8-darkgrid")
-        self.colors = sns.color_palette("husl", 10)
+        plt.style.use("seaborn-v0_8-muted")
+        self.colors = sns.color_palette("muted", 16)
 
     # -------------------------
     # Public Plot Methods
     # -------------------------
-    def plot_throughput_time_series(
-        self,
-        result: IperfResult,
-        output_file: Path | None = None,
-        title: str | None = None,
-    ):
-        """Plot throughput over time and cumulative data transfer."""
-
-        times, throughput_bits, throughput_bytes = self._extract_time_series(result)
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        self._plot_line(
-            ax1,
-            times,
-            throughput_bits,
-            "Time (seconds)",
-            "Throughput (Gbps)",
-            "Throughput vs Time",
-            self.colors[0],
-            "o",
-        )
-        cumulative_bytes = np.cumsum(throughput_bytes)
-        self._plot_line(
-            ax2,
-            times,
-            cumulative_bytes,
-            "Time (seconds)",
-            "Cumulative Data (MB)",
-            "Cumulative Data Transfer",
-            self.colors[1],
-            "s",
-        )
-
-        fig.suptitle(
-            title or "Iperf3 Results",
-            fontsize=16,
-            fontweight="bold",
-        )
-        self._finalize_figure(fig, output_file)
-        return fig
 
     def plot_multi_stream_comparison(
         self, result: IperfResult, output_file: Path | None = None
     ):
-        """Plot comparison of multiple parallel streams."""
+        """Plot stacked cumulative throughput of multiple parallel streams."""
 
-        stream_data = self._extract_stream_data(result)
+        if not result.json_results:
+            raise ValueError("JSON results required for multi-stream plotting")
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-        # Individual stream throughput
-        for i, (sid, data) in enumerate(stream_data.items()):
-            self._plot_line(
-                ax1,
-                data["times"],
-                data["throughput"],
-                "Time (seconds)",
-                "Throughput (Gbps)",
-                "Individual Stream Throughput",
-                self.colors[i % len(self.colors)],
-                "o",
-                label=f"Stream {sid}",
+        # Collect stream data for plotting
+        stream_data = {}
+        all_throughputs = []
+        stream_labels = []
+
+        for interval_idx, interval in enumerate(result.json_results.intervals):
+            # Check if this is the first interval to validate interval duration
+            if interval_idx == 0:
+                interval_duration = (
+                    interval.sum.seconds if hasattr(interval, "sum") else 1.0
+                )
+                if abs(interval_duration - 1.0) > 0.1:  # More than 100ms difference
+                    print(
+                        f"Warning: Intervals are {interval_duration:.3f}s, not 1s. Time axis may be misleading."
+                    )
+
+            for stream in interval.streams:
+                sid = stream.socket
+                if sid not in stream_data:
+                    stream_data[sid] = {"times": [], "throughputs": []}
+
+                # Use interval index + 1 as the time to show data at interval endpoints
+                # This gives us time points: 1, 2, 3, 4, 5, etc.
+                aligned_time = interval_idx + 1
+                stream_data[sid]["times"].append(aligned_time)
+                stream_data[sid]["throughputs"].append(stream.throughput_gbps)
+
+                # Collect for distribution plot
+                all_throughputs.append(stream.throughput_gbps)
+                stream_labels.append(f"Stream {sid}")
+
+        # Prepare data for stacked area plot
+        if stream_data:
+            # Get common time points (assuming all streams have same time intervals)
+            times = next(iter(stream_data.values()))["times"]
+
+            # Create matrix of throughput values for each stream at each time
+            throughput_matrix = []
+            stream_ids = list(stream_data.keys())
+
+            for sid in stream_ids:
+                throughput_matrix.append(stream_data[sid]["throughputs"])
+
+            # Create stacked area plot
+            throughput_array = np.array(throughput_matrix)
+
+            ax1.stackplot(
+                times,
+                *throughput_array,
+                labels=[f"Stream {sid}" for sid in stream_ids],
+                colors=self.colors[: len(stream_ids)],
+                alpha=0.8,
             )
-        ax1.legend()
+
+            # Add total throughput line
+            total_throughput = np.sum(throughput_array, axis=0)
+            ax1.plot(times, total_throughput, "k-", linewidth=2, label="Total")
+
+            ax1.set_xlabel("Time (seconds)")
+            ax1.set_ylabel("Cumulative Throughput (Gbps)")
+            ax1.set_title("Stacked Stream Throughput Over Time")
 
         # Distribution of throughput per stream
-        all_throughputs = [
-            val for data in stream_data.values() for val in data["throughput"]
-        ]
-        stream_labels = [
-            f"Stream {sid}"
-            for sid, data in stream_data.items()
-            for _ in data["throughput"]
-        ]
         df = pd.DataFrame(
             {"Throughput (Gbps)": all_throughputs, "Stream": stream_labels}
         )
-        sns.boxplot(data=df, x="Stream", y="Throughput (Gbps)", ax=ax2)
+
+        # Create box plot with matching colors
+        if stream_data:
+            # Get unique stream IDs to match colors with stacked plot
+            unique_streams = list(stream_data.keys())
+            stream_colors = {
+                f"Stream {sid}": self.colors[i] for i, sid in enumerate(unique_streams)
+            }
+
+            # Create color palette for box plot matching the stacked plot
+            box_colors = [
+                stream_colors.get(stream, self.colors[0])
+                for stream in df["Stream"].unique()
+            ]
+
+            sns.boxplot(
+                data=df,
+                x="Stream",
+                y="Throughput (Gbps)",
+                hue="Stream",
+                ax=ax2,
+                palette=box_colors,
+                legend=False,
+            )
+        else:
+            sns.boxplot(data=df, x="Stream", y="Throughput (Gbps)", ax=ax2)
+
         ax2.set_title("Throughput Distribution by Stream")
         ax2.tick_params(axis="x", rotation=45)
 
@@ -156,7 +183,7 @@ class IperfPlotter:
         ax3.set_title("Test Duration Comparison")
         ax3.set_xticks(x_pos)
         ax3.set_xticklabels(
-            [f"{row['name']}\n{row['run_id']}" for _, row in df.iterrows()],
+            [row["run_id"] for _, row in df.iterrows()],
             rotation=45,
             ha="right",
         )
@@ -179,27 +206,13 @@ class IperfPlotter:
     def _extract_time_series(result: IperfResult):
         if not result.json_results:
             raise ValueError("JSON results required for time series extraction")
-        times, throughput_bits, throughput_bytes = [], [], []
+        times, throughput_gbps, data_mb = [], [], []
         for interval in result.json_results.intervals:
             sum_data = interval.sum
-            times.append(sum_data.start)
-            throughput_bits.append(sum_data.bits_per_second / 1e9)  # Gbps
-            throughput_bytes.append(sum_data.bytes / 1e6)  # MB
-        return times, throughput_bits, throughput_bytes
-
-    @staticmethod
-    def _extract_stream_data(result: IperfResult):
-        if not result.json_results:
-            raise ValueError("JSON results required for stream data extraction")
-        stream_data = {}
-        for interval in result.json_results.intervals:
-            time = interval.sum.start
-            for stream in interval.streams:
-                sid = stream.socket
-                stream_data.setdefault(sid, {"times": [], "throughput": []})
-                stream_data[sid]["times"].append(time)
-                stream_data[sid]["throughput"].append(stream.bits_per_second / 1e9)
-        return stream_data
+            times.append(sum_data.time)
+            throughput_gbps.append(sum_data.throughput_gbps)
+            data_mb.append(sum_data.data_mb)
+        return times, throughput_gbps, data_mb
 
     @staticmethod
     def _build_comparison_dataframe(results: list[IperfResult]) -> pd.DataFrame:
@@ -211,10 +224,10 @@ class IperfPlotter:
                 comparison_data.append(
                     {
                         "run_id": res.run_id[:8],
-                        "sent_gbps": sent.bits_per_second / 1e9,
-                        "received_gbps": recv.bits_per_second / 1e9,
-                        "sent_mb": sent.bytes / 1e6,
-                        "received_mb": recv.bytes / 1e6,
+                        "sent_gbps": sent.throughput_gbps,
+                        "received_gbps": recv.throughput_gbps,
+                        "sent_mb": sent.data_mb,
+                        "received_mb": recv.data_mb,
                         "duration": sent.seconds,
                     }
                 )
@@ -251,7 +264,7 @@ class IperfPlotter:
         ax.set_title(title)
         ax.set_xticks(x_pos)
         ax.set_xticklabels(
-            [f"{row['name']}\n{row['run_id']}" for _, row in df.iterrows()],
+            [row["run_id"] for _, row in df.iterrows()],
             rotation=45,
             ha="right",
         )
@@ -274,10 +287,10 @@ class IperfPlotter:
             "Start Time": json_results.start.timestamp.time,
             "Duration": f"{sent.seconds:.2f} sec",
             "Protocol": json_results.start.test_start.protocol,
-            "Sent Throughput": f"{sent.bits_per_second / 1e9:.2f} Gbps",
-            "Recv Throughput": f"{recv.bits_per_second / 1e9:.2f} Gbps",
-            "Sent Data": f"{sent.bytes / 1e6:.2f} MB",
-            "Recv Data": f"{recv.bytes / 1e6:.2f} MB",
+            "Sent Throughput": f"{sent.throughput_gbps:.2f} Gbps",
+            "Recv Throughput": f"{recv.throughput_gbps:.2f} Gbps",
+            "Sent Data": f"{sent.data_mb:.2f} MB",
+            "Recv Data": f"{recv.data_mb:.2f} MB",
         }
 
     @staticmethod
