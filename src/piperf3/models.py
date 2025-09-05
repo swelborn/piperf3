@@ -476,6 +476,15 @@ class GeneralConfig(BuilderBase):
     )
     run_id: str | None = CLIField(None, "--run-id", help="Run identifier")
 
+    @model_validator(mode="after")
+    def expand_path(self):
+        try:
+            self.iperf3_path = self.iperf3_path.resolve(strict=True)
+            self.output_directory = self.output_directory.resolve(strict=True)
+        except Exception as e:
+            raise ValueError(f"Error resolving paths: {e}") from e
+        return self
+
 
 class StreamBase(BaseModel):
     socket: int
@@ -621,7 +630,7 @@ class IperfResult(BaseModel):
         for attr_name in path_attrs:
             path = getattr(self, attr_name)
             if path and isinstance(path, Path):
-                setattr(self, attr_name, path.expanduser().absolute())
+                setattr(self, attr_name, path.resolve(strict=False))
         return self
 
     def save(self) -> None:
