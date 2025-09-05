@@ -1,6 +1,6 @@
 [project]
 name = "piperf3"
-version = "0.0.5"
+version = "0.0.6"
 description = "A Python wrapper for iperf3 with configuration management, plotting, and CLI interface"
 readme = "README.md"
 authors = [
