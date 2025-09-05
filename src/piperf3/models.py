@@ -480,7 +480,6 @@ class GeneralConfig(BuilderBase):
     def expand_path(self):
         try:
             self.iperf3_path = self.iperf3_path.resolve(strict=True)
-            self.output_directory = self.output_directory.resolve(strict=True)
         except Exception as e:
             raise ValueError(f"Error resolving paths: {e}") from e
         return self
