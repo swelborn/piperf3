@@ -476,14 +476,6 @@ class GeneralConfig(BuilderBase):
     )
     run_id: str | None = CLIField(None, "--run-id", help="Run identifier")
 
-    @model_validator(mode="after")
-    def expand_path(self):
-        try:
-            self.iperf3_path = self.iperf3_path.resolve(strict=True)
-        except Exception as e:
-            raise ValueError(f"Error resolving paths: {e}") from e
-        return self
-
 
 class StreamBase(BaseModel):
     socket: int
