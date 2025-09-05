@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -76,9 +75,7 @@ class Iperf3Runner:
                         process_result.stdout
                     )
                 except ValidationError as e:
-                    self.console.print(
-                        f"[red]Error parsing JSON output: {e}.[/red]"
-                    )
+                    self.console.print(f"[red]Error parsing JSON output: {e}.[/red]")
                 result = IperfResult(
                     run_id=run_id,
                     start_time=start_time,
