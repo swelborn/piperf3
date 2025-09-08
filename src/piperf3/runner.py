@@ -34,14 +34,17 @@ class Iperf3Runner:
                 self.console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1) from e
 
-    def build_command(self, config: IperfClientConfig | IperfServerConfig) -> list[str]:
-        cmd = [self.iperf3_path]
+    def build_command(self, config: IperfClientConfig | IperfServerConfig, general_config: GeneralConfig) -> list[str]:
+        cmd: list[str] = []
+        if general_config.numa_node:
+            cmd.extend(["numactl", f"--cpunodebind={general_config.numa_node}"])
+        cmd.extend([self.iperf3_path])
         if isinstance(config, IperfClientConfig):
             if not config.server_host:
                 raise ValueError("Client mode requires server_host to be set")
             cmd.extend(["-c", config.server_host])
         elif isinstance(config, IperfServerConfig):
-            cmd.append("-s")
+            cmd.extend(["-s"])
         cmd.extend(config.build_cli_args())
         return cmd
 

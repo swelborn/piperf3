@@ -475,6 +475,15 @@ class GeneralConfig(BuilderBase):
         help="Directory to store output files",
     )
     run_id: str | None = CLIField(None, "--run-id", help="Run identifier")
+    results_dir_timestamp: bool = CLIField(
+        True,
+        "--results-dir-timestamp",
+        help="Whether to add a timestamp prefix to output directory",
+    )
+    slurm: SlurmConfig = Field(default_factory=SlurmConfig, description="SLURM job info")
+    numa_node: int | None = CLIField(
+        None, "--numa-node", parser=int, min=0, help="NUMA node to bind to"
+    )
 
 
 class StreamBase(BaseModel):
