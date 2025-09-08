@@ -34,7 +34,11 @@ class Iperf3Runner:
                 self.console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1) from e
 
-    def build_command(self, config: IperfClientConfig | IperfServerConfig, general_config: GeneralConfig) -> list[str]:
+    def build_command(
+        self,
+        config: IperfClientConfig | IperfServerConfig,
+        general_config: GeneralConfig,
+    ) -> list[str]:
         cmd: list[str] = []
         if general_config.numa_node:
             cmd.extend(["numactl", f"--cpunodebind={general_config.numa_node}"])

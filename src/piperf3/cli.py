@@ -160,7 +160,7 @@ def server(
     config_info = config.pretty_print()
     display_config_panel("Server Configuration", config_info, style="bold green")
     try:
-        result = runner.run(config, general_config)
+        runner.run(config, general_config)
     except KeyboardInterrupt:
         console.print("\n[yellow]Server interrupted by user[/yellow]")
     except Exception as e:
