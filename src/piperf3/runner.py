@@ -50,12 +50,14 @@ class Iperf3Runner:
         config: IperfClientConfig | IperfServerConfig,
         general_config: GeneralConfig,
         timeout: int | None = None,
-    ) -> IperfResult:
+    ) -> IperfResult | None:
         # Determine the description based on config type
         if isinstance(config, IperfClientConfig):
             description = "Running iperf3 client test..."
+            command_file = "client_command.txt"
         else:
             description = "Running iperf3 server..."
+            command_file = "server_command.txt"
 
         with Progress(
             SpinnerColumn(),
@@ -66,14 +68,17 @@ class Iperf3Runner:
             try:
                 run_id = general_config.run_id or str(uuid.uuid4())
                 output_dir = self._create_output_directory(general_config, run_id)
-                cmd = self.build_command(config)
-                self._save_command(output_dir, cmd)
+                cmd = self.build_command(config, general_config)
+                # Save command to file
+                (output_dir / command_file).write_text(" ".join(cmd))
                 start_time = datetime.now(timezone.utc)
 
                 process_result = self._run_subprocess(
                     cmd, cwd=output_dir, timeout=timeout
                 )
                 json_results = None
+                if isinstance(config, IperfServerConfig):
+                    return
                 try:
                     json_results = Iperf3JsonResult.model_validate_json(
                         process_result.stdout
@@ -123,10 +128,6 @@ class Iperf3Runner:
             cwd=cwd,
             env=os.environ,
         )
-
-    @staticmethod
-    def _save_command(output_dir: Path, cmd: list[str]) -> None:
-        (output_dir / "command.txt").write_text(" ".join(cmd))
 
     @staticmethod
     def _create_output_directory(general_config: GeneralConfig, run_id: str) -> Path:

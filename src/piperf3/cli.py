@@ -141,6 +141,8 @@ def client(
 
     runner = Iperf3Runner(iperf3_path=general_config.iperf3_path)
     result = runner.run(config, general_config)
+    if result is None:
+        return
     display_results(result, verbose=config.verbose)
 
     if plot and result.json_results:
@@ -159,8 +161,6 @@ def server(
     display_config_panel("Server Configuration", config_info, style="bold green")
     try:
         result = runner.run(config, general_config)
-        display_results(result, verbose=config.verbose)
-        console.print(f"[green]Results saved to: {result.output_directory}[/green]")
     except KeyboardInterrupt:
         console.print("\n[yellow]Server interrupted by user[/yellow]")
     except Exception as e:
