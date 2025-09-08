@@ -34,14 +34,21 @@ class Iperf3Runner:
                 self.console.print(f"[red]Error: {e}[/red]")
                 raise typer.Exit(1) from e
 
-    def build_command(self, config: IperfClientConfig | IperfServerConfig) -> list[str]:
-        cmd = [self.iperf3_path]
+    def build_command(
+        self,
+        config: IperfClientConfig | IperfServerConfig,
+        general_config: GeneralConfig,
+    ) -> list[str]:
+        cmd: list[str] = []
+        if general_config.numa_node:
+            cmd.extend(["numactl", f"--cpunodebind={general_config.numa_node}"])
+        cmd.extend([self.iperf3_path])
         if isinstance(config, IperfClientConfig):
             if not config.server_host:
                 raise ValueError("Client mode requires server_host to be set")
             cmd.extend(["-c", config.server_host])
         elif isinstance(config, IperfServerConfig):
-            cmd.append("-s")
+            cmd.extend(["-s"])
         cmd.extend(config.build_cli_args())
         return cmd
 
@@ -50,12 +57,14 @@ class Iperf3Runner:
         config: IperfClientConfig | IperfServerConfig,
         general_config: GeneralConfig,
         timeout: int | None = None,
-    ) -> IperfResult:
+    ) -> IperfResult | None:
         # Determine the description based on config type
         if isinstance(config, IperfClientConfig):
             description = "Running iperf3 client test..."
+            command_file = "client_command.txt"
         else:
             description = "Running iperf3 server..."
+            command_file = "server_command.txt"
 
         with Progress(
             SpinnerColumn(),
@@ -66,14 +75,17 @@ class Iperf3Runner:
             try:
                 run_id = general_config.run_id or str(uuid.uuid4())
                 output_dir = self._create_output_directory(general_config, run_id)
-                cmd = self.build_command(config)
-                self._save_command(output_dir, cmd)
+                cmd = self.build_command(config, general_config)
+                # Save command to file
+                (output_dir / command_file).write_text(" ".join(cmd))
                 start_time = datetime.now(timezone.utc)
 
                 process_result = self._run_subprocess(
                     cmd, cwd=output_dir, timeout=timeout
                 )
                 json_results = None
+                if isinstance(config, IperfServerConfig):
+                    return
                 try:
                     json_results = Iperf3JsonResult.model_validate_json(
                         process_result.stdout
@@ -125,14 +137,13 @@ class Iperf3Runner:
         )
 
     @staticmethod
-    def _save_command(output_dir: Path, cmd: list[str]) -> None:
-        (output_dir / "command.txt").write_text(" ".join(cmd))
-
-    @staticmethod
     def _create_output_directory(general_config: GeneralConfig, run_id: str) -> Path:
         base_dir = general_config.output_directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dir_name = f"{timestamp}_{run_id[:8]}"
+        if general_config.results_dir_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            dir_name = f"{timestamp}_{run_id}"
+        else:
+            dir_name = run_id
         output_dir = base_dir / dir_name
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir

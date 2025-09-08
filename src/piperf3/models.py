@@ -430,6 +430,44 @@ class SlurmConfig(BaseSettings):
     nodelist: str | None = None
     procid: str | None = None
     localid: str | None = None
+    mpi_type: str | None = None
+    step_id: str | None = None
+    nodeid: str | None = None
+    task_pid: str | None = None
+    prio_process: str | None = None
+    submit_dir: str | None = None
+    job_licenses: str | None = None
+    srun_comm_host: str | None = None
+    job_gid: str | None = None
+    job_end_time: str | None = None
+    tasks_per_node: str | None = None
+    nnodes: str | None = None
+    launch_node_ipaddr: str | None = None
+    step_tasks_per_node: str | None = None
+    job_start_time: str | None = None
+    job_nodelist: str | None = None
+    cluster_name: str | None = None
+    job_cpus_per_node: str | None = None
+    topology_addr: str | None = None
+    step_nodelist: str | None = None
+    srun_comm_port: str | None = None
+    jobid: str | None = None
+    job_qos: str | None = None
+    topology_addr_pattern: str | None = None
+    cpus_on_node: str | None = None
+    job_uid: str | None = None
+    script_context: str | None = None
+    pty_win_row: str | None = None
+    job_user: str | None = None
+    pty_win_col: str | None = None
+    stepmgr: str | None = None
+    submit_host: str | None = None
+    step_launcher_port: str | None = None
+    pty_port: str | None = None
+    gtids: str | None = None
+    step_num_tasks: str | None = None
+    step_num_nodes: str | None = None
+    oom_kill_step: str | None = None
 
 
 class NodeInfo(BaseModel):
@@ -475,6 +513,17 @@ class GeneralConfig(BuilderBase):
         help="Directory to store output files",
     )
     run_id: str | None = CLIField(None, "--run-id", help="Run identifier")
+    results_dir_timestamp: bool = CLIField(
+        True,
+        "--results-dir-timestamp",
+        help="Whether to add a timestamp prefix to output directory",
+    )
+    slurm: SlurmConfig = Field(
+        default_factory=SlurmConfig, description="SLURM job info"
+    )
+    numa_node: int | None = CLIField(
+        None, "--numa-node", parser=int, min=0, help="NUMA node to bind to"
+    )
 
 
 class StreamBase(BaseModel):
@@ -485,6 +534,18 @@ class StreamBase(BaseModel):
     bytes: int
     bits_per_second: float
     sender: bool
+    retransmits: int | None = None
+    snd_cwnd: int | None = None
+    snd_wnd: int | None = None
+    rtt: int | None = None
+    rttvar: int | None = None
+    pmtu: int | None = None
+    reorder: int | None = None
+    max_snd_cwnd: int | None = None
+    max_snd_wnd: int | None = None
+    max_rtt: int | None = None
+    min_rtt: int | None = None
+    mean_rtt: int | None = None
 
     @property
     def throughput_gbps(self) -> float:
@@ -504,6 +565,13 @@ class StreamBase(BaseModel):
 
 class IntervalStream(StreamBase):
     omitted: bool
+    retransmits: int | None = None
+    snd_cwnd: int | None = None
+    snd_wnd: int | None = None
+    rtt: int | None = None
+    rttvar: int | None = None
+    pmtu: int | None = None
+    reorder: int | None = None
 
 
 class IntervalSum(BaseModel):
@@ -514,6 +582,7 @@ class IntervalSum(BaseModel):
     bits_per_second: float
     omitted: bool
     sender: bool
+    retransmits: int | None = None
 
     @property
     def throughput_gbps(self) -> float:
@@ -611,6 +680,7 @@ class Connected(BaseModel):
 class TimeStamp(BaseModel):
     time: str
     timesecs: int
+    timemillisecs: int | None = None
 
 
 class ConnectingTo(BaseModel):
@@ -625,7 +695,8 @@ class StartSection(BaseModel):
     timestamp: TimeStamp
     connecting_to: ConnectingTo
     cookie: str
-    tcp_mss_default: int
+    tcp_mss: int | None = None
+    tcp_mss_default: int | None = None
     target_bitrate: int
     fq_rate: int
     sock_bufsize: int
@@ -672,9 +743,8 @@ class IperfResult(BaseModel):
         if self.json_results:
             self.json_file = directory / JSON_RESULTS_FILENAME
             self._write_json(self.json_file, self.json_results.model_dump())
-        else:
-            self.stdout_file = directory / STDOUT_FILENAME
-            self._write_if_content(self.stdout_file, self.stdout)
+        self.stdout_file = directory / STDOUT_FILENAME
+        self._write_if_content(self.stdout_file, self.stdout)
 
         self.coerce_full_paths()
         self._write_json(
