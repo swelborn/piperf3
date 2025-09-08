@@ -430,6 +430,44 @@ class SlurmConfig(BaseSettings):
     nodelist: str | None = None
     procid: str | None = None
     localid: str | None = None
+    mpi_type: str | None = None
+    step_id: str | None = None
+    nodeid: str | None = None
+    task_pid: str | None = None
+    prio_process: str | None = None
+    submit_dir: str | None = None
+    job_licenses: str | None = None
+    srun_comm_host: str | None = None
+    job_gid: str | None = None
+    job_end_time: str | None = None
+    tasks_per_node: str | None = None
+    nnodes: str | None = None
+    launch_node_ipaddr: str | None = None
+    step_tasks_per_node: str | None = None
+    job_start_time: str | None = None
+    job_nodelist: str | None = None
+    cluster_name: str | None = None
+    job_cpus_per_node: str | None = None
+    topology_addr: str | None = None
+    step_nodelist: str | None = None
+    srun_comm_port: str | None = None
+    jobid: str | None = None
+    job_qos: str | None = None
+    topology_addr_pattern: str | None = None
+    cpus_on_node: str | None = None
+    job_uid: str | None = None
+    script_context: str | None = None
+    pty_win_row: str | None = None
+    job_user: str | None = None
+    pty_win_col: str | None = None
+    stepmgr: str | None = None
+    submit_host: str | None = None
+    step_launcher_port: str | None = None
+    pty_port: str | None = None
+    gtids: str | None = None
+    step_num_tasks: str | None = None
+    step_num_nodes: str | None = None
+    oom_kill_step: str | None = None
 
 
 class NodeInfo(BaseModel):
