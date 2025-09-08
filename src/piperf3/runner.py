@@ -135,8 +135,11 @@ class Iperf3Runner:
     @staticmethod
     def _create_output_directory(general_config: GeneralConfig, run_id: str) -> Path:
         base_dir = general_config.output_directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dir_name = f"{timestamp}_{run_id[:8]}"
+        if general_config.results_dir_timestamp:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            dir_name = f"{timestamp}_{run_id}"
+        else:
+            dir_name = run_id
         output_dir = base_dir / dir_name
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
