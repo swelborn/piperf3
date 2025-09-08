@@ -741,9 +741,8 @@ class IperfResult(BaseModel):
         if self.json_results:
             self.json_file = directory / JSON_RESULTS_FILENAME
             self._write_json(self.json_file, self.json_results.model_dump())
-        else:
-            self.stdout_file = directory / STDOUT_FILENAME
-            self._write_if_content(self.stdout_file, self.stdout)
+        self.stdout_file = directory / STDOUT_FILENAME
+        self._write_if_content(self.stdout_file, self.stdout)
 
         self.coerce_full_paths()
         self._write_json(
