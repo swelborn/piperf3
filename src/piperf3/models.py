@@ -532,6 +532,18 @@ class StreamBase(BaseModel):
     bytes: int
     bits_per_second: float
     sender: bool
+    retransmits: int | None = None
+    snd_cwnd: int | None = None
+    snd_wnd: int | None = None
+    rtt: int | None = None
+    rttvar: int | None = None
+    pmtu: int | None = None
+    reorder: int | None = None
+    max_snd_cwnd: int | None = None
+    max_snd_wnd: int | None = None
+    max_rtt: int | None = None
+    min_rtt: int | None = None
+    mean_rtt: int | None = None
 
     @property
     def throughput_gbps(self) -> float:
@@ -551,6 +563,13 @@ class StreamBase(BaseModel):
 
 class IntervalStream(StreamBase):
     omitted: bool
+    retransmits: int | None = None
+    snd_cwnd: int | None = None
+    snd_wnd: int | None = None
+    rtt: int | None = None
+    rttvar: int | None = None
+    pmtu: int | None = None
+    reorder: int | None = None
 
 
 class IntervalSum(BaseModel):
@@ -561,6 +580,7 @@ class IntervalSum(BaseModel):
     bits_per_second: float
     omitted: bool
     sender: bool
+    retransmits: int | None = None
 
     @property
     def throughput_gbps(self) -> float:
@@ -658,6 +678,7 @@ class Connected(BaseModel):
 class TimeStamp(BaseModel):
     time: str
     timesecs: int
+    timemillisecs: int | None = None
 
 
 class ConnectingTo(BaseModel):
@@ -672,7 +693,8 @@ class StartSection(BaseModel):
     timestamp: TimeStamp
     connecting_to: ConnectingTo
     cookie: str
-    tcp_mss_default: int
+    tcp_mss: int | None = None
+    tcp_mss_default: int | None = None
     target_bitrate: int
     fq_rate: int
     sock_bufsize: int
