@@ -18,7 +18,7 @@ from .models import (
 from .plotting import IperfPlotter
 from .runner import Iperf3Runner
 
-__version__ = "0.1.0"
+__version__ = "0.0.8"
 
 __all__ = [
     "CongestionAlgorithm",
