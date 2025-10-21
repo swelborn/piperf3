@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from piperf3._version import __version__
 from piperf3.constants import (
     JSON_RESULTS_FILENAME,
     METADATA_FILENAME,
@@ -485,6 +486,7 @@ class NodeInfo(BaseModel):
     python_build: tuple[str, str] = Field(default_factory=platform.python_build)
     python_compiler: str = Field(default_factory=platform.python_compiler)
     node: str = Field(default_factory=platform.node)
+    piperf3_version: str = Field(default_factory=lambda: __version__)
 
 
 class GeneralConfig(BuilderBase):

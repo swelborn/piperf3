@@ -5,10 +5,10 @@ on:
     branches:
       - main
     paths:
-      - 'src/piperf3/__init__.py'
+      - 'src/piperf3/_version.py'
   pull_request:
     paths:
-      - 'src/piperf3/__init__.py'
+      - 'src/piperf3/_version.py'
 
 jobs:
   check-version:
@@ -23,10 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get current version from __init__.py
+      - name: Get current version from _version.py
         id: current
         run: |
-          VERSION=$(grep '__version__ = ' src/piperf3/__init__.py | sed 's/__version__ = "\(.*\)"/\1/')
+          VERSION=$(grep '__version__ = ' src/piperf3/_version.py | sed 's/__version__ = "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
 
@@ -35,10 +35,10 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # For PRs, compare with the base branch
-            PREVIOUS_VERSION=$(git show origin/${{ github.base_ref }}:src/piperf3/__init__.py 2>/dev/null | grep '__version__ = ' | sed 's/__version__ = "\(.*\)"/\1/' || echo "")
+            PREVIOUS_VERSION=$(git show origin/${{ github.base_ref }}:src/piperf3/_version.py 2>/dev/null | grep '__version__ = ' | sed 's/__version__ = "\(.*\)"/\1/' || echo "")
           else
             # For pushes to main, compare with previous commit
-            PREVIOUS_VERSION=$(git show HEAD~1:src/piperf3/__init__.py 2>/dev/null | grep '__version__ = ' | sed 's/__version__ = "\(.*\)"/\1/' || echo "")
+            PREVIOUS_VERSION=$(git show HEAD~1:src/piperf3/_version.py 2>/dev/null | grep '__version__ = ' | sed 's/__version__ = "\(.*\)"/\1/' || echo "")
           fi
           echo "version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
 

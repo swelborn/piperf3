@@ -1,5 +1,6 @@
 """Python wrapper for iperf3 with configuration management and plotting."""
 
+from ._version import __version__
 from .cli import app
 
 # from .config import create_example_configs  # Temporarily commented out
@@ -18,8 +19,6 @@ from .models import (
 from .plotting import IperfPlotter
 from .runner import Iperf3Runner
 
-__version__ = "0.0.9"
-
 __all__ = [
     "CongestionAlgorithm",
     "Format",
@@ -33,6 +32,7 @@ __all__ = [
     "IperfServerConfig",
     "Protocol",
     "SlurmConfig",
+    "__version__",
     "main",
 ]
 
