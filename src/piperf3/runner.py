@@ -40,7 +40,7 @@ class Iperf3Runner:
         general_config: GeneralConfig,
     ) -> list[str]:
         cmd: list[str] = []
-        if general_config.numa_node:
+        if general_config.numa_node is not None:
             cmd.extend(["numactl", f"--cpunodebind={general_config.numa_node}"])
         cmd.extend([self.iperf3_path])
         if isinstance(config, IperfClientConfig):
