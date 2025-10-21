@@ -1,6 +1,6 @@
 [project]
 name = "piperf3"
-version = "0.0.7"
+dynamic = ["version"]
 description = "A Python wrapper for iperf3 with configuration management, plotting, and CLI interface"
 readme = "README.md"
 authors = [
@@ -26,6 +26,9 @@ piperf3 = "piperf3:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/piperf3/__init__.py"
 
 [dependency-groups]
 dev = [
